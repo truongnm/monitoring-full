@@ -11,12 +11,150 @@ name: ddm501-t04
 
 services:
   api:
+    image: ddm501-t04-api:latest
     build: .
     container_name: ddm501-t04-api
     ports:
       - "18000:8000"
     environment:
-      T04_TRAP: "0"
+      T04_TRAP: ${T04_TRAP:-0}
+      MODEL_BACKEND: mlflow
+      MODEL_NAME: wdbc-diagnosis
+      MODEL_STAGE: Production
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+      EVIDENTLY_CAPTURE_URL: http://evidently:8001/capture
+      EVIDENTLY_URL: http://evidently:8001
+    networks: [monitoring]
+    depends_on:
+      model-register:
+        condition: service_completed_successfully
+      evidently:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mlflow-db:
+    image: postgres:16
+    container_name: ddm501-t04-mlflow-db
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${MLFLOW_DB_PASSWORD:-mlflow-local}
+      POSTGRES_DB: mlflow
+    volumes:
+      - mlflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [monitoring]
+    restart: unless-stopped
+
+  minio:
+    image: ${S3_STORAGE_IMAGE:-docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z}
+    container_name: ddm501-t04-silo
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [monitoring]
+    restart: unless-stopped
+
+  minio-init:
+    image: ddm501-t04-mlflow:latest
+    build: ./mlflow
+    container_name: ddm501-t04-storage-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_ARTIFACT_BUCKET: mlflow-artifacts
+    command: ["python", "/app/init_bucket.py"]
+    networks: [monitoring]
+    restart: "no"
+
+  mlflow:
+    build: ./mlflow
+    container_name: ddm501-t04-mlflow
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri
+      - postgresql+psycopg2://mlflow:${MLFLOW_DB_PASSWORD:-mlflow-local}@mlflow-db:5432/mlflow
+      - --default-artifact-root
+      - s3://mlflow-artifacts
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+    depends_on:
+      mlflow-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "15000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks: [monitoring]
+    restart: unless-stopped
+
+  model-register:
+    image: ddm501-t04-api:latest
+    build: .
+    container_name: ddm501-t04-model-register
+    command: ["python", "scripts/register_model.py"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: wdbc-diagnosis
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks: [monitoring]
+    restart: "no"
+
+  evidently:
+    build: ./evidently
+    container_name: ddm501-t04-evidently
+    volumes:
+      - ./data/raw/wdbc.csv:/app/reference/wdbc.csv:ro
+      - evidently_reports:/app/reports
+    ports:
+      - "18001:8001"
     networks: [monitoring]
     restart: unless-stopped
 
@@ -39,6 +177,8 @@ services:
     networks: [monitoring]
     depends_on:
       api:
+        condition: service_healthy
+      evidently:
         condition: service_healthy
     restart: unless-stopped
 
@@ -93,6 +233,7 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
       PROMETHEUS_URL: http://prometheus:9090
+      EVIDENTLY_URL: http://evidently:8001
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
@@ -139,6 +280,8 @@ services:
         condition: service_completed_successfully
       prometheus:
         condition: service_started
+      evidently:
+        condition: service_healthy
     environment: *airflow-env
     volumes:
       - ./airflow/dags:/opt/airflow/dags:ro
@@ -162,3 +305,6 @@ volumes:
   grafana_data:
   airflow_db_data:
   airflow_logs:
+  mlflow_db_data:
+  minio_data:
+  evidently_reports:

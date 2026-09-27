@@ -1,0 +1,29 @@
+groups:
+  - name: evidently-drift
+    rules:
+      - alert: EvidentlyUnavailable
+        expr: up{job="evidently"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Evidently drift monitor is unavailable"
+          description: "Prometheus cannot scrape Evidently at {{ $labels.instance }}."
+
+      - alert: WDBCFeatureDrift
+        expr: evidently_data_drift_detected == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WDBC input features have drifted"
+          description: "Evidently detected feature drift in the production prediction window."
+
+      - alert: MultipleWDBCFeaturesDrifted
+        expr: evidently_drifted_features_count >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "At least five WDBC features have drifted"
+          description: "Evidently reports {{ $value }} drifted input features."

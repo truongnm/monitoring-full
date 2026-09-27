@@ -1,4 +1,4 @@
-# Four alerts. Each one is written from a question someone would actually be
+# Five alerts. Each one is written from a question someone would actually be
 # woken up for -- not from a metric that happened to exist.
 #
 # `for:` is the part beginners skip and then regret. Without it, a single

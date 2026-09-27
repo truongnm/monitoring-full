@@ -9,6 +9,7 @@ Send traffic at the API, because 569 rows sitting in a file draw no graphs.
 """
 import argparse
 import json
+import os
 import random
 import time
 from pathlib import Path
@@ -30,6 +31,11 @@ def main() -> None:
                     help="add N standard deviations to every feature")
     ap.add_argument("--broken", type=float, default=0.0,
                     help="fraction of requests to send with a field missing")
+    ap.add_argument("--analyze", action="store_true",
+                    help="trigger an Evidently drift analysis after sending traffic")
+    ap.add_argument("--evidently-url",
+                    default=os.getenv("EVIDENTLY_URL", "http://127.0.0.1:18001"),
+                    help="base URL of the Evidently service")
     args = ap.parse_args()
 
     features = json.loads(CARD.read_text())["features"]
@@ -58,6 +64,15 @@ def main() -> None:
             time.sleep(interval)
 
     print(f"\ndone: {sent} requests, {ok} ok, {failed} failed")
+    if args.analyze:
+        response = httpx.post(
+            f"{args.evidently_url.rstrip('/')}/analyze",
+            json={"window_size": max(10, min(200, sent)),
+                  "drift_share_threshold": 0.5},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        print(f"Evidently analysis: {response.json()}")
 
 
 if __name__ == "__main__":

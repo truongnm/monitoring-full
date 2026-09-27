@@ -1,0 +1,60 @@
+{
+  "uid": "wdbc-feature-drift",
+  "title": "WDBC Feature Drift - Evidently",
+  "tags": ["ddm501", "wdbc", "evidently", "drift"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {"from": "now-24h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "Feature drift detected",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "ddm501-prom"},
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 5},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "No drift"}, "1": {"text": "Drift"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "targets": [{"refId": "A", "expr": "evidently_data_drift_detected", "datasource": {"type": "prometheus", "uid": "ddm501-prom"}}]
+    },
+    {
+      "id": 2,
+      "title": "Share of drifted features",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "ddm501-prom"},
+      "gridPos": {"x": 6, "y": 0, "w": 9, "h": 5},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"lineWidth": 2, "fillOpacity": 10}}, "overrides": []},
+      "targets": [{"refId": "A", "expr": "evidently_drift_score", "legendFormat": "drifted feature share", "datasource": {"type": "prometheus", "uid": "ddm501-prom"}}]
+    },
+    {
+      "id": 3,
+      "title": "Drifted feature count",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "ddm501-prom"},
+      "gridPos": {"x": 15, "y": 0, "w": 9, "h": 5},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 3}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "targets": [{"refId": "A", "expr": "evidently_drifted_features_count", "datasource": {"type": "prometheus", "uid": "ddm501-prom"}}]
+    },
+    {
+      "id": 4,
+      "title": "Drift status by feature",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "ddm501-prom"},
+      "gridPos": {"x": 0, "y": 5, "w": 16, "h": 9},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "custom": {"lineWidth": 2, "drawStyle": "line", "spanNulls": true}}, "overrides": []},
+      "targets": [{"refId": "A", "expr": "evidently_feature_drift", "legendFormat": "{{feature_name}}", "datasource": {"type": "prometheus", "uid": "ddm501-prom"}}]
+    },
+    {
+      "id": 5,
+      "title": "Captured predictions / analyses per second",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "ddm501-prom"},
+      "gridPos": {"x": 16, "y": 5, "w": 8, "h": 9},
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"lineWidth": 2}}, "overrides": []},
+      "targets": [
+        {"refId": "A", "expr": "rate(evidently_captured_predictions_total[5m])", "legendFormat": "captured predictions", "datasource": {"type": "prometheus", "uid": "ddm501-prom"}},
+        {"refId": "B", "expr": "rate(evidently_analysis_total[5m])", "legendFormat": "analyses", "datasource": {"type": "prometheus", "uid": "ddm501-prom"}}
+      ]
+    }
+  ]
+}
