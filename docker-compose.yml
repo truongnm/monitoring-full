@@ -1,0 +1,164 @@
+# Tutorial 04 — the API, Prometheus, and Grafana.
+#
+#   docker compose up --build
+#
+#   API         http://127.0.0.1:18000/docs
+#   Prometheus  http://127.0.0.1:19090
+#   Grafana     http://127.0.0.1:13000     (anonymous viewer, no login)
+#
+
+name: ddm501-t04
+
+services:
+  api:
+    build: .
+    container_name: ddm501-t04-api
+    ports:
+      - "18000:8000"
+    environment:
+      T04_TRAP: "0"
+    networks: [monitoring]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: ddm501-t04-prometheus
+    ports:
+      - "19090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2d"
+      # Lets you reload rules with `curl -X POST .../-/reload` instead of
+      # restarting the container and losing the data you were looking at.
+      - "--web.enable-lifecycle"
+    networks: [monitoring]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: ddm501-t04-grafana
+    ports:
+      - "13000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    networks: [monitoring]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  airflow-db:
+    image: postgres:16
+    container_name: ddm501-t04-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [monitoring]
+    restart: unless-stopped
+
+  airflow-init:
+    image: apache/airflow:2.10.5-python3.11
+    container_name: ddm501-t04-airflow-init
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+      PROMETHEUS_URL: http://prometheus:9090
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow_logs:/opt/airflow/logs
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - >-
+        airflow db migrate &&
+        (airflow users list --output json | grep -q '"username": "admin"' ||
+        airflow users create --username admin --password admin --firstname Airflow
+        --lastname Admin --role Admin --email admin@example.com)
+    networks: [monitoring]
+    restart: "no"
+
+  airflow-webserver:
+    image: apache/airflow:2.10.5-python3.11
+    container_name: ddm501-t04-airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow_logs:/opt/airflow/logs
+    command: webserver
+    ports:
+      - "18081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [monitoring]
+    restart: unless-stopped
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.5-python3.11
+    container_name: ddm501-t04-airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow_logs:/opt/airflow/logs
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [monitoring]
+    restart: unless-stopped
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  airflow_db_data:
+  airflow_logs:
